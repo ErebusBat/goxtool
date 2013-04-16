@@ -127,10 +127,11 @@ class GoxConfig(SafeConfigParser):
 
     _DEFAULTS = [["gox", "currency", "USD"]
                 ,["gox", "use_ssl", "True"]
-                ,["gox", "use_plain_old_websocket", "True"]
+                ,["gox", "use_plain_old_websocket", "False"]
                 ,["gox", "use_http_api", "False"]
                 ,["gox", "load_fulldepth", "True"]
                 ,["gox", "load_history", "True"]
+                ,["gox", "history_timeframe", "15"]
                 ,["gox", "secret_key", ""]
                 ,["gox", "secret_secret", ""]
                 ,["goxtool", "set_xterm_title", "True"]
@@ -172,6 +173,14 @@ class GoxConfig(SafeConfigParser):
     def get_string(self, sect, opt):
         """get string value from config"""
         return self.get_safe(sect, opt)
+
+    def get_int(self, sect, opt):
+        """get int value from config"""
+        vstr = self.get_safe(sect, opt)
+        try:
+            return int(vstr)
+        except ValueError:
+            return 0
 
     def _default(self, section, option, default):
         """create a default option if it does not yet exist"""
@@ -507,23 +516,35 @@ class History(BaseObject):
     def slot_fullhistory(self, dummy_sender, data):
         """process the result of the fullhistory request"""
         (history) = data
-        self.candles = []
-        new_candle = OHLCV(0, 0, 0, 0, 0, 0)
+
+        def get_time_round(date):
+            """round timestamp to current candle timeframe"""
+            return int(date / self.timeframe) * self.timeframe
+
+        #remove existing recent candle(s) if any, we will create them fresh
+        date_begin = get_time_round(int(history[0]["date"]))
+        while len(self.candles) and self.candles[0].tim >= date_begin:
+            self.candles.pop(0)
+
+        new_candle = OHLCV(0, 0, 0, 0, 0, 0) #this is a dummy, not actually inserted
+        count_added = 0
         for trade in history:
             date = int(trade["date"])
             price = int(trade["price_int"])
             volume = int(trade["amount_int"])
-            time_round = int(date / self.timeframe) * self.timeframe
+            time_round = get_time_round(date)
             if time_round > new_candle.tim:
                 if new_candle.tim > 0:
                     self._add_candle(new_candle)
+                    count_added += 1
                 new_candle = OHLCV(
                     time_round, price, price, price, price, volume)
             new_candle.update(price, volume)
 
         # insert current (incomplete) candle
         self._add_candle(new_candle)
-        self.debug("### got %d candles" % self.length())
+        count_added += 1
+        self.debug("### got %d updated candle(s)" % count_added)
         self.signal_changed(self, (self.length()))
 
     def last_candle(self):
@@ -542,7 +563,6 @@ class BaseClient(BaseObject):
     """abstract base class for SocketIOClient and WebsocketClient"""
 
     SOCKETIO_HOST = "socketio.mtgox.com"
-    SOCKETIO_HOST_OLD = "socketio-old.mtgox.com"
     WEBSOCKET_HOST = "websocket.mtgox.com"
     HTTP_HOST = "data.mtgox.com"
 
@@ -570,6 +590,7 @@ class BaseClient(BaseObject):
         self._terminating = False
         self.connected = False
         self._time_last_received = 0
+        self.history_last_candle = None
 
     def start(self):
         """start the client"""
@@ -626,15 +647,25 @@ class BaseClient(BaseObject):
     def request_history(self):
         """request trading history"""
 
+        # Gox() will have set this field to the timestamp of the last
+        # known candle, so we only request data since this time
+        since = self.history_last_candle
+
         def history_thread():
             """request trading history"""
 
             # 1308503626, 218868 <-- last small transacion ID
             # 1309108565, 1309108565842636 <-- first big transaction ID
 
+            if since:
+                querystring = "?since=" + str(since * 1000000)
+            else:
+                querystring = ""
+
             self.debug("requesting history")
             json_hist = http_request("https://" +  self.HTTP_HOST \
-                + "/api/2/BTC" + self.currency + "/money/trades")
+                + "/api/2/BTC" + self.currency + "/money/trades"
+                + querystring)
             history = json.loads(json_hist)
             if history["result"] == "success":
                 self.signal_fullhistory(self, history["data"])
@@ -650,6 +681,9 @@ class BaseClient(BaseObject):
         """subscribe to the needed channels and alo initiate the
         download of the initial full market depth"""
 
+        self.send(json.dumps({"op":"mtgox.subscribe", "type":"depth"}))
+        self.send(json.dumps({"op":"mtgox.subscribe", "type":"trades"}))
+        self.send(json.dumps({"op":"mtgox.subscribe", "type":"ticker"}))
         self.send(json.dumps({"op":"mtgox.subscribe", "type":"lag"}))
 
         if FORCE_HTTP_API or self.config.get_bool("gox", "use_http_api"):
@@ -806,7 +840,7 @@ class WebsocketClient(BaseClient):
         """connect to the webocket and tart receiving inan infinite loop.
         Try to reconnect whenever connection is lost. Each received json
         string will be dispatched with a signal_recv signal"""
-        reconnect_time = 5
+        reconnect_time = 1
         use_ssl = self.config.get_bool("gox", "use_ssl")
         wsp = {True: "wss://", False: "ws://"}[use_ssl]
         while not self._terminating:  #loop 0 (connect, reconnect)
@@ -814,7 +848,6 @@ class WebsocketClient(BaseClient):
                 ws_url = wsp + self.WEBSOCKET_HOST \
                     + "/mtgox?Currency=" + self.currency
 
-                self.debug("*** Hint: connection problems? try: use_plain_old_websocket=False")
                 self.debug("trying plain old Websocket: %s ... " % ws_url)
 
                 self.socket = websocket.WebSocket()
@@ -926,7 +959,6 @@ class SocketIOClient(BaseClient):
         wsp = {True: "wss://", False: "ws://"}[use_ssl]
         while not self._terminating: #loop 0 (connect, reconnect)
             try:
-                self.debug("*** Hint: connection problems? try: use_plain_old_websocket=True")
                 self.debug("trying Socket.IO: %s ..." % self.hostname)
 
                 self.socket = SocketIO()
@@ -976,15 +1008,9 @@ class SocketIOClient(BaseClient):
 
     def slot_keepalive_timer(self, _sender, _data):
         """send a keepalive, just to make sure our socket is not dead"""
-        self.debug("sending keepalive")
-        self._try_send_raw("2::")
-
-
-class SocketIOOldClient(SocketIOClient):
-    """experimental client for the beta websocket"""
-    def __init__(self, currency, secret, config):
-        SocketIOClient.__init__(self, currency, secret, config)
-        self.hostname = self.SOCKETIO_HOST_OLD
+        if self.connected:
+            self.debug("sending keepalive")
+            self._try_send_raw("2::")
 
 
 # pylint: disable=R0902
@@ -1015,13 +1041,18 @@ class Gox(BaseObject):
         self._idkey      = ""
         self.wallet = {}
         self.order_lag = 0
+        self.last_tid = 0
+        self.count_submitted = 0  # number of submitted orders not yet acked
 
         self.config = config
         self.currency = config.get("gox", "currency", "USD")
 
         Signal.signal_error.connect(self.signal_debug)
 
-        self.history = History(self, 60 * 15)
+        timeframe = 60 * config.get_int("gox", "history_timeframe")
+        if not timeframe:
+            timeframe = 60 * 15
+        self.history = History(self, timeframe)
         self.history.signal_debug.connect(self.signal_debug)
 
         self.orderbook = OrderBook(self)
@@ -1035,15 +1066,17 @@ class Gox(BaseObject):
         if use_websocket:
             self.client = WebsocketClient(self.currency, secret, config)
         else:
-            if FORCE_PROTOCOL == "socketio-old":
-                self.client = SocketIOOldClient(self.currency, secret, config)
-            else:
-                self.client = SocketIOClient(self.currency, secret, config)
+            self.client = SocketIOClient(self.currency, secret, config)
 
         self.client.signal_debug.connect(self.signal_debug)
         self.client.signal_recv.connect(self.slot_recv)
         self.client.signal_fulldepth.connect(self.signal_fulldepth)
         self.client.signal_fullhistory.connect(self.signal_fullhistory)
+
+        self.timer_poll = Timer(120)
+        self.timer_poll.connect(self.slot_poll)
+
+        self.history.signal_changed.connect(self.slot_history_changed)
 
     def start(self):
         """connect to MtGox and start receiving events."""
@@ -1057,6 +1090,7 @@ class Gox(BaseObject):
 
     def order(self, typ, price, volume):
         """place pending order. If price=0 then it will be filled at market"""
+        self.count_submitted += 1
         self.client.send_order_add(typ, price, volume)
 
     def buy(self, price, volume):
@@ -1107,6 +1141,20 @@ class Gox(BaseObject):
         if handler:
             handler(msg)
 
+    def slot_poll(self, _sender, _data):
+        """poll stuff from http in regular intervals, not yet implemented"""
+        if self.client.secret and self.client.secret.know_secret():
+            # poll recent own trades
+            # fixme: how do i do this, whats the api for this?
+            pass
+
+    def slot_history_changed(self, _sender, _data):
+        """this is a small optimzation, if we tell the client the time
+        of the last known candle then it won't fetch full history next time"""
+        last_candle = self.history.last_candle()
+        if last_candle:
+            self.client.history_last_candle = last_candle.tim
+
     def _on_op_error(self, msg):
         """handle error mesages (op:error)"""
         self.debug("_on_op_error()", msg)
@@ -1127,16 +1175,8 @@ class Gox(BaseObject):
 
         elif reqid == "orders":
             self.debug("### got own order list")
-            self.orderbook.reset_own()
-            for order in result:
-                if order["currency"] == self.currency:
-                    self.orderbook.add_own(Order(
-                        int(order["price"]["value_int"]),
-                        int(order["amount"]["value_int"]),
-                        order["type"],
-                        order["oid"],
-                        order["status"]
-                    ))
+            self.count_submitted = 0
+            self.orderbook.init_own(result)
             self.debug("### have %d own orders for BTC/%s" %
                 (len(self.orderbook.owns), self.currency))
 
@@ -1168,6 +1208,7 @@ class Gox(BaseObject):
             oid = result
             self.debug("### got ack for order/add:", typ, price, volume, oid)
             self.orderbook.add_own(Order(price, volume, typ, oid, "pending"))
+            self.count_submitted -= 1
 
         elif "order_cancel:" in reqid:
             # cancel request has been acked but we won't remove it from our
@@ -1218,9 +1259,9 @@ class Gox(BaseObject):
         total_volume = int(msg["total_volume_int"])
 
         # self.debug(
-        #     "depth: ", type_str+":", int2str(price, self.currency),
-        #     "vol:", int2str(volume, "BTC"),
-        #     "now:", int2str(total_volume, "BTC"))
+        #             "depth: ", type_str+":", int2str(price, self.currency),
+        #             "vol:", int2str(volume, "BTC"),
+        #             "total vol:", int2str(total_volume, "BTC"))
         self.signal_depth(self, (type_str, price, volume, total_volume))
 
     def _on_op_private_trade(self, msg):
@@ -1265,7 +1306,7 @@ class Gox(BaseObject):
         currency = balance["currency"]
         total = int(balance["value_int"])
         self.wallet[currency] = total
-        self.signal_wallet(self, ())
+        self.signal_wallet(self, None)
 
     def _on_op_private_lag(self, msg):
         """handle the lag message"""
@@ -1352,6 +1393,7 @@ class OrderBook(BaseObject):
         self.gox = gox
 
         self.signal_changed = Signal()
+        self.signal_owns_changed = Signal()
 
         gox.signal_ticker.connect(self.slot_ticker)
         gox.signal_depth.connect(self.slot_depth)
@@ -1463,6 +1505,7 @@ class OrderBook(BaseObject):
                 self.owns.append(Order(price, volume, typ, oid, status))
 
         self.signal_changed(self, None)
+        self.signal_owns_changed(self, None)
 
     def slot_fulldepth(self, dummy_sender, data):
         """Slot for signal_fulldepth, process received fulldepth data.
@@ -1587,16 +1630,39 @@ class OrderBook(BaseObject):
                 return True
         return False
 
-    def reset_own(self):
-        """clear all own orders"""
+    def init_own(self, own_orders):
+        """called by gox when the initial order list is downloaded,
+        this will happen after connect or reconnect"""
         self.owns = []
+        for order in own_orders:
+            if order["currency"] == self.gox.currency:
+                self._add_own(Order(
+                    int(order["price"]["value_int"]),
+                    int(order["amount"]["value_int"]),
+                    order["type"],
+                    order["oid"],
+                    order["status"]
+                ))
+
         self.signal_changed(self, None)
+        self.signal_owns_changed(self, None)
 
     def add_own(self, order):
+        """called by gox when a new order has been acked
+        after it has been submitted. This is a separate method because
+        we need to fire the *_changed signals when this happens"""
+        self._add_own(order)
+        self.signal_changed(self, None)
+        self.signal_owns_changed(self, None)
+
+    def _add_own(self, order):
         """add order to the list of own orders. This method is used
-        by the Gox object only during initial download of complete
-        order list, all subsequent updates will then be done through
-        the event methods slot_user_order and slot_trade"""
+        only during initial download of complete order list. This will also
+        add dummy levels in the bids and asks list to make them visible in the
+        UI even if they are not yet officially "open" on the server and
+        therefore not yet in the official orderbook. All subsequent updates
+        of the owns list will be done through the event method slot_user_order
+        """
 
         def insert_dummy(lst, is_ask):
             """insert an empty (volume=0) dummy order into the bids or asks
@@ -1627,5 +1693,3 @@ class OrderBook(BaseObject):
                 insert_dummy(self.asks, True)
             if order.typ == "bid":
                 insert_dummy(self.bids, False)
-
-            self.signal_changed(self, ())
