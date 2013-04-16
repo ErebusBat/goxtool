@@ -1217,10 +1217,10 @@ class Gox(BaseObject):
         volume = int(msg["volume_int"])
         total_volume = int(msg["total_volume_int"])
 
-        self.debug(
-            "depth: ", type_str+":", int2str(price, self.currency),
-            "vol:", int2str(volume, "BTC"),
-            "now:", int2str(total_volume, "BTC"))
+        # self.debug(
+        #     "depth: ", type_str+":", int2str(price, self.currency),
+        #     "vol:", int2str(volume, "BTC"),
+        #     "now:", int2str(total_volume, "BTC"))
         self.signal_depth(self, (type_str, price, volume, total_volume))
 
     def _on_op_private_trade(self, msg):
