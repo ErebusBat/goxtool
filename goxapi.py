@@ -638,7 +638,9 @@ class BaseClient(BaseObject):
             and then terminate. This is called in a separate thread after
             the streaming API has been connected."""
             self.debug("requesting initial full depth")
-            fulldepth = http_request("https://" +  self.HTTP_HOST \
+            use_ssl = self.config.get_bool("gox", "use_ssl")
+            proto = {True: "https", False: "http"}[use_ssl]
+            fulldepth = http_request(proto + "://" +  self.HTTP_HOST \
                 + "/api/2/BTC" + self.currency + "/money/depth/full")
             self.signal_fulldepth(self, (json.loads(fulldepth)))
 
@@ -663,7 +665,9 @@ class BaseClient(BaseObject):
                 querystring = ""
 
             self.debug("requesting history")
-            json_hist = http_request("https://" +  self.HTTP_HOST \
+            use_ssl = self.config.get_bool("gox", "use_ssl")
+            proto = {True: "https", False: "http"}[use_ssl]
+            json_hist = http_request(proto + "://" +  self.HTTP_HOST \
                 + "/api/2/BTC" + self.currency + "/money/trades"
                 + querystring)
             history = json.loads(json_hist)
@@ -681,18 +685,18 @@ class BaseClient(BaseObject):
         """subscribe to the needed channels and alo initiate the
         download of the initial full market depth"""
 
-        self.send(json.dumps({"op":"mtgox.subscribe", "type":"depth"}))
-        self.send(json.dumps({"op":"mtgox.subscribe", "type":"trades"}))
-        self.send(json.dumps({"op":"mtgox.subscribe", "type":"ticker"}))
+        #self.send(json.dumps({"op":"mtgox.subscribe", "type":"depth"}))
+        #self.send(json.dumps({"op":"mtgox.subscribe", "type":"trades"}))
+        #self.send(json.dumps({"op":"mtgox.subscribe", "type":"ticker"}))
         self.send(json.dumps({"op":"mtgox.subscribe", "type":"lag"}))
 
         if FORCE_HTTP_API or self.config.get_bool("gox", "use_http_api"):
-            self.enqueue_http_request("money/orders", {}, "orders")
             self.enqueue_http_request("money/idkey", {}, "idkey")
+            self.enqueue_http_request("money/orders", {}, "orders")
             self.enqueue_http_request("money/info", {}, "info")
         else:
-            self.send_signed_call("private/orders", {}, "orders")
             self.send_signed_call("private/idkey", {}, "idkey")
+            self.send_signed_call("private/orders", {}, "orders")
             self.send_signed_call("private/info", {}, "info")
 
         if self.config.get_bool("gox", "load_fulldepth"):
@@ -711,7 +715,7 @@ class BaseClient(BaseObject):
             try:
                 answer = self.http_signed_call(api_endpoint, params)
                 if answer["result"] == "success":
-                    # the fiollowing will reformat the answer in such a way
+                    # the following will reformat the answer in such a way
                     # that we can pass it directly to signal_recv()
                     # as if it had come directly from the websocket
                     ret = {"op": "result", "id": reqid, "result": answer["data"]}
@@ -722,6 +726,8 @@ class BaseClient(BaseObject):
 
             except Exception as exc:
                 self.debug("### error:", exc, api_endpoint, params, reqid)
+                if "500" in str(exc):
+                    continue
                 self.enqueue_http_request(api_endpoint, params, reqid)
 
             self.http_requests.task_done()
@@ -753,8 +759,11 @@ class BaseClient(BaseObject):
             'Rest-Sign': base64.b64encode(sign)
         }
 
-        url = "https://" + self.HTTP_HOST + "/api/2/" + api_endpoint
-        self.debug("### (http) calling %s" % url)
+        use_ssl = self.config.get_bool("gox", "use_ssl")
+        proto = {True: "https", False: "http"}[use_ssl]
+        url = proto + "://" + self.HTTP_HOST + "/api/2/" + api_endpoint
+
+        self.debug("### (%s) calling %s" % (proto, url))
         req = URLRequest(url, post, headers)
         with contextlib.closing(urlopen(req, post)) as res:
             return json.load(res)
@@ -837,7 +846,7 @@ class WebsocketClient(BaseClient):
         BaseClient.__init__(self, currency, secret, config)
 
     def _recv_thread_func(self):
-        """connect to the webocket and tart receiving inan infinite loop.
+        """connect to the websocket and start receiving in an infinite loop.
         Try to reconnect whenever connection is lost. Each received json
         string will be dispatched with a signal_recv signal"""
         reconnect_time = 1
@@ -994,10 +1003,9 @@ class SocketIOClient(BaseClient):
                 self.connected = False
                 if not self._terminating:
                     self.debug(exc.__class__.__name__, exc, \
-                        "reconnecting in 5 seconds...")
-                    if self.socket:
-                        self.socket.close()
-                    time.sleep(5)
+                        "reconnecting in 1 seconds...")
+                    self.socket.close()
+                    time.sleep(1)
 
     def send(self, json_str):
         """send a string to the websocket. This method will prepend it
@@ -1331,7 +1339,7 @@ class Gox(BaseObject):
     def _on_invalid_call(self, msg):
         """this comes as an op=remark message and is a strange mystery"""
         # Workaround: Maybe a bug in their server software,
-        # I don't know whats missing. Its all poorly documented :-(
+        # I don't know what's missing. Its all poorly documented :-(
         # Sometimes some API calls fail the first time for no reason,
         # if this happens just send them again. This happens only
         # somtimes (10%) and sending them again will eventually succeed.
@@ -1453,7 +1461,7 @@ class OrderBook(BaseObject):
                         if self.asks[0].volume <= 0:
                             voldiff -= self.asks[0].volume
                             self.asks.pop(0)
-                            self._update_total_ask(voldiff)
+                        self._update_total_ask(voldiff)
                 if len(self.asks):
                     self.ask = self.asks[0].price
 
@@ -1465,7 +1473,7 @@ class OrderBook(BaseObject):
                         if self.bids[0].volume <= 0:
                             voldiff -= self.bids[0].volume
                             self.bids.pop(0)
-                            self._update_total_bid(voldiff, price)
+                        self._update_total_bid(voldiff, price)
                 if len(self.bids):
                     self.bid = self.bids[0].price
 
