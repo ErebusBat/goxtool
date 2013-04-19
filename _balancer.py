@@ -33,6 +33,7 @@ class Strategy(strategy.Strategy):
     def __init__(self, gox):
         strategy.Strategy.__init__(self, gox)
         self.last_trade = 0
+        self.temp_halt = False
 
     def slot_before_unload(self, _sender, _data):
         pass
@@ -43,6 +44,7 @@ class Strategy(strategy.Strategy):
         if key == ord("c"):
             # remove existing rebalancing orders
             self.debug("canceling all rebalancing orders")
+            self.temp_halt = True
             self.cancel_orders()
 
         if key == ord("p"):
@@ -50,7 +52,34 @@ class Strategy(strategy.Strategy):
             # do this the portfolio should already be balanced.
             self.debug("adding new initial rebalancing orders")
             book = self.gox.orderbook
+            self.temp_halt = False
             self.place_orders((book.bid + book.ask) / 2)
+
+        if key == ord("u"):
+            gox.client.channel_subscribe()
+
+        if key == ord("i"):
+            price = (gox.orderbook.bid + gox.orderbook.ask) / 2
+            vol_buy = self.get_buy_at_price(price)
+            self.debug("BTC difference:",
+                goxapi.int2float(vol_buy, "BTC"))
+
+        if key == ord("b"):
+            price = (gox.orderbook.bid + gox.orderbook.ask) / 2
+            vol_buy = self.get_buy_at_price(price)
+            if abs(vol_buy) > 0.01 * COIN:
+                self.temp_halt = True
+                self.cancel_orders()
+                if vol_buy > 0:
+                    self.debug("buy %f at market" %
+                        goxapi.int2float(vol_buy, "BTC"))
+                    gox.buy(0, vol_buy)
+                else:
+                    self.debug("sell %f at market" %
+                        goxapi.int2float(-vol_buy, "BTC"))
+                    gox.sell(0, -vol_buy)
+
+
 
     def cancel_orders(self):
         """cancel all rebalancing orders, we identify
@@ -107,6 +136,7 @@ class Strategy(strategy.Strategy):
         ))
         self.gox.sell(next_sell, sell_amount)
 
+
     def slot_trade(self, gox, (date, price, volume, typ, own)):
         """a trade message has been receivd"""
         # not interested in other people's trades
@@ -117,8 +147,13 @@ class Strategy(strategy.Strategy):
         if not is_own(price):
             return
 
+        text = {"bid": "sold", "ask": "bought"}[typ]
+        self.debug("*** %s %f at %f" % (
+            text,
+            goxapi.int2float(volume, "BTC"),
+            goxapi.int2float(price, gox.currency)
+        ))
         self.last_trade = price
-        self.debug("trade (type: %s) detected!" % typ)
         self.check_trades()
 
     def slot_owns_changed(self, orderbook, _dummy):
@@ -127,24 +162,43 @@ class Strategy(strategy.Strategy):
 
     def check_trades(self):
         """find out if we need to place new orders and do it if neccesary"""
-        # don't place double orders. only act if a trade has happened.
-        if not self.last_trade:
+
+        # bot temporarily disabled
+        if self.temp_halt:
             return
 
-        # since we have always exactly 2 orders, a bid and an ask we
-        # must count the open orders and we know we must act when there
-        # is exactly one open order.
+        # still waiting for submitted orders,
+        # can wait for next signal
+        if self.gox.count_submitted:
+            return
+
+        # we count the open and pending orders
         count = 0
-        for order in self.gox.orderbook.owns:
+        count_pending = 0
+        book = self.gox.orderbook
+        for order in book.owns:
             if is_own(order.price):
-                count += 1
+                if order.status == "open":
+                    count += 1
+                else:
+                    count_pending += 1
+
+        # as long as there are ANY pending orders around we
+        # just do nothing and wait for the next signal
+        if count_pending:
+            return
 
         # if count is exacty 1 then one of the orders must have been filled,
         # now we cancel the other one and place two fresh orders in the
         # distance of DISTANCE around current price.
         if count == 1:
-            self.cancel_orders()
-            self.place_orders(self.last_trade)
-
-            # reset the flag again
+            price = self.last_trade
             self.last_trade = 0
+            if not price:
+                price = (book.ask + book.bid) / 2
+                self.debug(
+                    "*** missed trade message, using current price %f" %
+                    goxapi.int2float(price, self.gox.currency)
+                )
+            self.cancel_orders()
+            self.place_orders(price)
