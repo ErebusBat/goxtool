@@ -6,7 +6,7 @@ constant asset allocation ratio of exactly 50/50 = fiat/BTC
 import strategy
 import goxapi
 
-DISTANCE    = 7     # percent price distance of next rebalancing orders
+DISTANCE    = 5     # percent price distance of next rebalancing orders
 MARKER      = 7     # lowest digit of price to identify bot's own orders
 COIN        = 1E8   # number of satoshi per coin, this is a constant.
 
