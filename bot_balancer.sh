@@ -15,6 +15,6 @@ if [[ -f goxtool.log ]]; then
   mv goxtool.log goxtool_$(date '+%Y%m%d-%H%M%S').log
 fi
 
-# Switch to websocket, per https://bitcointalk.org/index.php?topic=181584.msg1923260#msg1923260
-#./goxtool.py --protocol=socketio --use-http --strategy=_balancer.py
-./goxtool.py --protocol=websocket --strategy=_balancer.py
+# Switch to socketio=>websocket, per https://bitcointalk.org/index.php?topic=181584.msg1923260#msg1923260
+# Add use-http, per https://bitcointalk.org/index.php?topic=181584.msg1932699#msg1932699
+./goxtool.py --protocol=websocket --use-http --strategy=_balancer.py
