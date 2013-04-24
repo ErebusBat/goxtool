@@ -61,8 +61,15 @@ class Strategy(strategy.Strategy):
         if key == ord("i"):
             price = (gox.orderbook.bid + gox.orderbook.ask) / 2
             vol_buy = self.get_buy_at_price(price)
-            self.debug("BTC difference:",
-                goxapi.int2float(vol_buy, "BTC"))
+            line1 = "BTC difference: " + goxapi.int2str(vol_buy, "BTC")            
+            if len(self.gox.wallet):
+                line1 += "\t"
+                for currency in self.gox.wallet:
+                    line1 += currency + " " \
+                    + goxapi.int2str(self.gox.wallet[currency], currency).strip() \
+                    + " + "
+                line1 = line1.strip(" +")
+            self.debug(line1)
 
         if key == ord("b"):
             price = (gox.orderbook.bid + gox.orderbook.ask) / 2
