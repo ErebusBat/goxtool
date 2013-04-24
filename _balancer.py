@@ -154,6 +154,10 @@ class Strategy(strategy.Strategy):
         if not is_own(price):
             return
 
+        # Trigger the info display so it gets logged, before the trade info
+        self.slot_keypress(self, gox, ord("i"))
+        
+        # Continue with trade info
         text = {"bid": "sold", "ask": "bought"}[typ]
         self.debug("*** %s %f at %f" % (
             text,
