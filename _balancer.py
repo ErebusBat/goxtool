@@ -6,7 +6,7 @@ constant asset allocation ratio of exactly 50/50 = fiat/BTC
 import strategy
 import goxapi
  
-DISTANCE    = 7     # percent price distance of next rebalancing orders
+DISTANCE    = 5     # percent price distance of next rebalancing orders
 MARKER      = 7     # lowest digit of price to identify bot's own orders
 COIN        = 1E8   # number of satoshi per coin, this is a constant.
  
@@ -46,14 +46,24 @@ class Strategy(strategy.Strategy):
             self.temp_halt = True
             self.cancel_orders()
  
-        if key == ord("p"):
-            # create the initial two rebalancing orders and start trading.
-            # Before you do this the portfolio should already be balanced.
-            # use "i" to show current status and "b" to rebalance with a
-            # market order at current price.
-            self.debug("adding new initial rebalancing orders")
-            self.temp_halt = False
-            self.place_orders()
+          if key == ord("i"):
+            price = (gox.orderbook.bid + gox.orderbook.ask) / 2
+            vol_buy = self.get_buy_at_price(price)
+            line1 = "BTC difference: " + goxapi.int2str(vol_buy, "BTC")
+            # Log current wallet
+            if len(self.gox.wallet):
+              line1 += "\t"
+              for currency in self.gox.wallet:
+                line1 += currency + " " \
+                + goxapi.int2str(self.gox.wallet[currency], currency).strip() \
+                + " + "
+              line1 = line1.strip(" +")
+            # Log last price
+            price = (self.gox.orderbook.ask + self.gox.orderbook.bid) / 2
+            line1 += "\tLast Price: %f" % goxapi.int2float(price, self.gox.currency)
+
+            # Print the whole thing out
+            self.debug(line1)
  
         if key == ord("u"):
             # update the own order list, history, depth and wallet
