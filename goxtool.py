@@ -495,7 +495,19 @@ class WinStatus(Win):
         self.sort_currency_list_if_changed()
         self.win.bkgd(" ", COLOR_PAIR["status_text"])
         self.win.erase()
-        line1 = "Currency: " + self.gox.currency + " | "
+
+        # Initialize the line1 variable in case we don't have a last_candle yet
+        line1 = ""
+
+        # Display last trade in header
+        last_candle = self.gox.history.last_candle()
+        if last_candle:
+            line1 += "Last: " \
+            + goxapi.int2str(last_candle.cls, self.gox.currency).strip() \
+            + " | "
+
+        # Display GOX account info (currency, wallet)
+        line1 += "Currency: " + self.gox.currency + " | "
         line1 += "Account: "
         if len(self.sorted_currency_list):
             for currency in self.sorted_currency_list:
