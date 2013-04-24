@@ -644,6 +644,10 @@ class DlgListItems(Win):
                     func()
                     done = True
 
+        # Clean up the title, which can persist on screen instances
+        if self.gox.config.get_bool("goxtool", "set_xterm_title"):
+          curses.putp("\033]0;\007")
+
         # help the garbage collector clean up circular references
         # to make sure __del__() will be called to close the dialog
         del self.dlg_keys
