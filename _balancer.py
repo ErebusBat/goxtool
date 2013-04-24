@@ -46,24 +46,24 @@ class Strategy(strategy.Strategy):
             self.temp_halt = True
             self.cancel_orders()
  
-          if key == ord("i"):
-            price = (gox.orderbook.bid + gox.orderbook.ask) / 2
-            vol_buy = self.get_buy_at_price(price)
-            line1 = "BTC difference: " + goxapi.int2str(vol_buy, "BTC")
-            # Log current wallet
-            if len(self.gox.wallet):
-              line1 += "\t"
-              for currency in self.gox.wallet:
-                line1 += currency + " " \
-                + goxapi.int2str(self.gox.wallet[currency], currency).strip() \
-                + " + "
-              line1 = line1.strip(" +")
-            # Log last price
-            price = (self.gox.orderbook.ask + self.gox.orderbook.bid) / 2
-            line1 += "\tLast Price: %f" % goxapi.int2float(price, self.gox.currency)
+        if key == ord("i"):
+          price = (gox.orderbook.bid + gox.orderbook.ask) / 2
+          vol_buy = self.get_buy_at_price(price)
+          line1 = "BTC difference: " + goxapi.int2str(vol_buy, "BTC")
+          # Log current wallet
+          if len(self.gox.wallet):
+            line1 += "\t"
+            for currency in self.gox.wallet:
+              line1 += currency + " " \
+              + goxapi.int2str(self.gox.wallet[currency], currency).strip() \
+              + " + "
+            line1 = line1.strip(" +")
+          # Log last price
+          price = (self.gox.orderbook.ask + self.gox.orderbook.bid) / 2
+          line1 += "\tLast Price: %f" % goxapi.int2float(price, self.gox.currency)
 
-            # Print the whole thing out
-            self.debug(line1)
+          # Print the whole thing out
+          self.debug(line1)
  
         if key == ord("u"):
             # update the own order list, history, depth and wallet
